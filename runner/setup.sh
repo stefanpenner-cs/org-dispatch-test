@@ -11,7 +11,7 @@ mkdir -p "$RUNNER_DIR"
 cd "$RUNNER_DIR"
 
 # Get a runner registration token via the API
-TOKEN=$(gh api "orgs/${ORG}/actions/runners/registration-token" --jq '.token')
+TOKEN=$(gh api "orgs/${ORG}/actions/runners/registration-token" --method POST --jq '.token')
 
 # Download runner if not already present
 if [ ! -f ./config.sh ]; then
