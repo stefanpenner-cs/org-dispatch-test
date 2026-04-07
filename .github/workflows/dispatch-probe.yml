@@ -1,0 +1,39 @@
+name: dispatch-probe
+
+on:
+  repository_dispatch:
+    types: [probe]
+  workflow_dispatch:
+    inputs:
+      probe_id:
+        description: 'Unique probe identifier'
+        required: false
+        default: 'manual'
+      sleep_seconds:
+        description: 'How long the job should sleep (simulate work)'
+        required: false
+        default: '0'
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Record probe
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            PROBE_ID="${{ github.event.client_payload.probe_id }}"
+            SLEEP="${{ github.event.client_payload.sleep_seconds }}"
+          else
+            PROBE_ID="${{ github.event.inputs.probe_id }}"
+            SLEEP="${{ github.event.inputs.sleep_seconds }}"
+          fi
+
+          echo "::notice::PROBE_START probe_id=${PROBE_ID} time=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+
+          SLEEP="${SLEEP:-0}"
+          if [ "$SLEEP" -gt 0 ] 2>/dev/null; then
+            echo "Sleeping ${SLEEP}s to simulate work..."
+            sleep "$SLEEP"
+          fi
+
+          echo "::notice::PROBE_END probe_id=${PROBE_ID} time=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"

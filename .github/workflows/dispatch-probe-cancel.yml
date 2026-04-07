@@ -1,0 +1,19 @@
+name: dispatch-probe-cancel
+
+on:
+  repository_dispatch:
+    types: [probe-cancel]
+
+concurrency:
+  group: probe-cancel
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Record probe
+        run: |
+          PROBE_ID="${{ github.event.client_payload.probe_id }}"
+          echo "::notice::CANCEL_PROBE probe_id=${PROBE_ID} time=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          sleep "${{ github.event.client_payload.sleep_seconds || 60 }}"
