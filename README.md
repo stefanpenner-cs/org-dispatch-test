@@ -191,6 +191,28 @@ This is byte-for-byte identical to a real successful dispatch. There is **no way
 | **Risk** | Low (you know it failed) | **High (you think it succeeded)** |
 | **Blast radius** | Just the rate-limited token | **Entire org (all repos)** |
 
+### Question 3: Does the 50k limit count runs or jobs?
+
+**Tested 2026-04-08.** Used a 256-job matrix workflow (`strategy.matrix` with 256 entries) in a fresh repo (`dispatch-matrix-test`). Runner stopped so all jobs queue.
+
+#### Result: The limit counts runs, not jobs
+
+We sent 250 dispatches, each creating 1 workflow run with 256 queued jobs. At the end:
+
+- **177 queued runs** (175 accepted via 204, 75 rejected via 403 rate limit, +2 from earlier testing)
+- **45,312 queued jobs** (177 × 256)
+- **Zero silent drops** — every accepted dispatch became a queued run
+
+If the limit counted jobs, drops would have started at ~196 dispatches (196 × 256 = 50,176 jobs). Instead, all 250 dispatches were processed normally.
+
+#### Key takeaways
+
+1. **The 50,000 limit counts workflow runs, not individual jobs.** A single dispatch that creates a 256-job matrix run counts as 1 toward the limit, not 256.
+
+2. **This means the effective job capacity is much higher than 50k.** With 256-job matrices, you could theoretically queue 50,000 × 256 = **12.8 million jobs** before hitting the limit.
+
+3. **GitHub's maximum matrix size is 256 jobs per workflow run.** This is a hard limit that cannot be overridden through configuration (though it can be bypassed via nested reusable workflows).
+
 ## Tools
 
 | Script | Purpose |
