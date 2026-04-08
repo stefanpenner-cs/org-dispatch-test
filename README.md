@@ -273,6 +273,58 @@ $ curl -s -o /dev/null -w '%{http_code}' -X POST \
 
 **Key difference:** `return_run_details` changes the response from 204 (empty) to 200 with a JSON body. This also means you can detect a dropped dispatch — if the returned run immediately shows `conclusion: failure` with 0 jobs, it was dropped due to the queue limit.
 
+<details>
+<summary>Full HTTP response headers — workflow_dispatch with return_run_details (200)</summary>
+
+```http
+HTTP/2 200
+date: Wed, 08 Apr 2026 16:55:14 GMT
+content-type: application/json; charset=utf-8
+content-length: 236
+cache-control: private, max-age=60, s-maxage=60
+x-oauth-scopes: admin:org, admin:public_key, gist, repo
+x-github-api-version-selected: 2022-11-28
+x-ratelimit-limit: 5000
+x-ratelimit-remaining: 4991
+x-ratelimit-used: 9
+x-ratelimit-resource: core
+
+{
+  "workflow_run_id": 24147793639,
+  "run_url": "https://api.github.com/repos/stefanpenner-cs/org-dispatch-test/actions/runs/24147793639",
+  "html_url": "https://github.com/stefanpenner-cs/org-dispatch-test/actions/runs/24147793639"
+}
+```
+
+</details>
+
+<details>
+<summary>Full HTTP response — checking the run status (dropped, queue full)</summary>
+
+```bash
+$ curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/stefanpenner-cs/org-dispatch-test/actions/runs/24147793639" \
+  | jq '{id, status, conclusion, created_at, updated_at}'
+{
+  "id": 24147793639,
+  "status": "completed",
+  "conclusion": "failure",
+  "created_at": "2026-04-08T16:55:13Z",
+  "updated_at": "2026-04-08T16:55:17Z"
+}
+
+$ curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/stefanpenner-cs/org-dispatch-test/actions/runs/24147793639/jobs" \
+  | jq '{total_count}'
+{
+  "total_count": 0
+}
+```
+
+**Signature of a dropped dispatch:** `completed` + `failure` + 0 jobs + ~4 second lifetime. The UI shows: *"This workflow run cannot be executed because the maximum number of queued jobs has been exceeded."*
+
+</details>
+
 #### No way to predict job count
 
 For simple workflows with static matrices, the job count is deterministic. But in the general case it's unknowable before runtime:
@@ -285,9 +337,33 @@ This means you can't reliably pre-calculate how much queue capacity a dispatch w
 
 ## Detection and mitigation
 
-The HTTP response (204) is indistinguishable from success, but dropped dispatches **are detectable** after the fact:
+Dropped dispatches **are detectable** — the HTTP 204 response is indistinguishable from success, but the run itself reveals the drop:
 
-### 0. Query for failed runs with zero jobs (most reliable)
+### 0. Dispatch with `return_run_details` + check (workflow_dispatch only, most direct)
+
+```bash
+# Step 1: dispatch and get run ID
+RUN_ID=$(curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  -d '{"ref":"main","return_run_details":true}' \
+  "https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches" \
+  | jq -r '.workflow_run_id')
+
+# Step 2: check status after a few seconds
+curl -s \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/{owner}/{repo}/actions/runs/$RUN_ID" \
+  | jq '{status, conclusion}'
+
+# Dropped:  {"status": "completed", "conclusion": "failure"}  (within ~2-4s, 0 jobs)
+# Normal:   {"status": "queued",    "conclusion": null}       → eventually "in_progress" → "success"
+```
+
+Two API calls, no webhooks, no polling. Only works for `workflow_dispatch` (which supports `return_run_details`). For `repository_dispatch`, push, PR, and other triggers, use the approaches below.
+
+### 1. Query for failed runs with zero jobs (all trigger types)
 
 ```bash
 # Find all runs that were dropped due to queue limit
