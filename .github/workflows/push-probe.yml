@@ -1,0 +1,14 @@
+name: push-probe
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Record probe
+        run: |
+          echo "::notice::PUSH_PROBE ref=${GITHUB_REF} sha=${GITHUB_SHA} time=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
