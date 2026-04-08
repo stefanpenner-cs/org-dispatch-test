@@ -280,7 +280,7 @@ Listen for `workflow_run` (fires once per run) or `workflow_job` (fires per job)
 
 If you dispatch and never receive a corresponding webhook, the dispatch was dropped. This also gives you the **run ID** that the dispatch API refuses to return.
 
-### 3. Reconciliation via client_payload
+### 3. Reconciliation via client_payload (dispatch-only)
 
 Put a unique ID in every dispatch payload, then query runs and match:
 
@@ -291,7 +291,7 @@ Put a unique ID in every dispatch payload, then query runs and match:
 # Later: search for it in workflow run logs/annotations
 ```
 
-This catches drops after the fact but requires the job to run and emit the ID.
+This catches drops after the fact but requires the job to run and emit the ID. **Major limitation:** this only works for `repository_dispatch` and `workflow_dispatch` — runs triggered by pushes, PRs, the GitHub UI, schedule, etc. have no `client_payload` to correlate. For those, webhook-based tracking is the only option.
 
 ## Comparison table
 
