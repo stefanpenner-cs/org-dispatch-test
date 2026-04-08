@@ -241,16 +241,37 @@ As of [February 2026](https://github.blog/changelog/2026-02-19-workflow-dispatch
 `repository_dispatch` still returns an empty 204 — no run ID, no way to correlate the request to the resulting run(s) (which may be multiple, since `repository_dispatch` fans out to all matching workflows).
 
 ```bash
-# workflow_dispatch — now supports return_run_details
-POST /repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches
-{"ref": "main", "inputs": {"probe_id": "abc"}, "return_run_details": true}
-# → returns run ID, workflow ID, URLs
+# workflow_dispatch with return_run_details — returns 200 with run ID
+$ curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  -d '{"ref":"main","return_run_details":true}' \
+  "https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+# → 200
+# {
+#   "workflow_run_id": 24147482484,
+#   "run_url": "https://api.github.com/repos/.../actions/runs/24147482484",
+#   "html_url": "https://github.com/.../actions/runs/24147482484"
+# }
+
+# workflow_dispatch without the param — old behavior
+$ curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  -d '{"ref":"main"}' \
+  "https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+# → 204 (empty)
 
 # repository_dispatch — still no run ID
-POST /repos/{owner}/{repo}/dispatches
-{"event_type": "probe", "client_payload": {"probe_id": "abc"}}
+$ curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  -d '{"event_type":"probe","client_payload":{"probe_id":"abc"}}' \
+  "https://api.github.com/repos/{owner}/{repo}/dispatches"
 # → 204 (empty)
 ```
+
+**Key difference:** `return_run_details` changes the response from 204 (empty) to 200 with a JSON body. This also means you can detect a dropped dispatch — if the returned run immediately shows `conclusion: failure` with 0 jobs, it was dropped due to the queue limit.
 
 #### No way to predict job count
 
