@@ -260,13 +260,15 @@ This means you can't reliably pre-calculate how much queue capacity a dispatch w
 
 Since silent drops are undetectable from the HTTP response, you need out-of-band detection:
 
-### 1. Poll queue depth (simplest)
+### 1. Poll queue depth (per-repo, doesn't scale)
 
 ```bash
 gh api repos/{owner}/{repo}/actions/runs?status=queued | jq '.total_count'
 ```
 
-Build this into your dispatch client as a circuit breaker: check before dispatching, refuse if count is above a threshold (e.g., 45,000). The `status=queued` filter correctly reports up to 50,000 (the unfiltered `total_count` caps at 40,000).
+This works as a circuit breaker for a single repo: check before dispatching, refuse if count is above a threshold (e.g., 45,000). The `status=queued` filter correctly reports up to 50,000 (the unfiltered `total_count` caps at 40,000).
+
+However, this requires one API call **per repo**. At 15k repos, polling them all is itself a rate-limit problem. There is no org-wide "total queued jobs across all repos" endpoint, so this approach only works if you know which repos are likely to accumulate deep queues.
 
 ### 2. Webhook listener (real-time)
 
@@ -306,7 +308,7 @@ This catches drops after the fact but requires the job to run and emit the ID.
 
 ## Implications for production
 
-1. **Monitor queue depth as a circuit breaker.** Poll `?status=queued` before dispatching and stop if approaching ~45k jobs. This is the only reliable way to prevent silent drops.
+1. **Monitor queue depth as a circuit breaker — but it doesn't scale.** Polling `?status=queued` per-repo works for known high-volume repos, but there's no org-wide endpoint. At 15k repos, polling them all burns your rate limit. Webhook-based tracking (see below) is the only approach that scales.
 
 2. **Matrix workflows consume proportionally more queue capacity.** A 256-job matrix dispatch uses 256× more queue than a single-job dispatch. Factor this into capacity planning.
 
