@@ -7,11 +7,11 @@ Empirical testing of GitHub's dispatch queue limits, rate limits, and failure be
 | Finding | Result |
 |---------|--------|
 | Secondary rate limit | Explicit **HTTP 403** at ~180 accepted/burst. Zero silent drops. |
-| Queue limit | **~50,000 queued jobs.** Silent drops — API returns 204 (fake success), run never created. |
+| Queue limit | **~50,000 queued jobs.** API returns 204, run is created but **instantly fails** (`conclusion: failure`, 0 jobs). |
 | Limit counts runs or jobs? | **Jobs.** 50k single-job runs and ~183 matrix runs (×256 jobs) both hit the same ceiling. |
 | Blast radius of full queue | **Entire org.** All repos in the org fail, not just the one with the full queue. |
 | Run ID from dispatch? | **No.** Both `repository_dispatch` and `workflow_dispatch` return empty 204. |
-| Detect silent drops? | **No** from the HTTP response. Must poll queue count or listen on webhooks. |
+| Detect dropped dispatches? | **Yes** — after the fact. Dropped runs show `conclusion: failure` with 0 jobs. Query `?status=completed&conclusion=failure` and filter for `jobs.total_count == 0`. |
 | Push events bypass rate limit? | **Yes.** ~40 branches/s, up to ~4010 per push. But still hit the 50k job queue limit. |
 | Secondary rate limit per-token? | **No.** Appears shared across tokens on same org/IP. 11 tokens performed same as 1. |
 | 500/10s workflow enqueue limit? | **Never reached.** The secondary rate limit always fires first at ~180/burst. |
@@ -138,27 +138,31 @@ With single-job workflows, it appeared to be a per-run limit because 1 run = 1 j
 
 The ~47k ceiling (vs exactly 50k) in the matrix test is likely due to per-run overhead or the 50 completed (0-job) failed runs from earlier org degradation also counting against the limit.
 
-#### Silent drops
+#### Dropped dispatches
 
-Once the queue is full, additional dispatches are **silently dropped**:
+Once the queue is full, additional dispatches are **accepted but immediately fail**:
 
 - The API returns **HTTP 204** (success) — identical to a real success
+- A workflow run **is created**, but instantly completes with `conclusion: failure` and **0 jobs**
+- The UI shows: *"This workflow run cannot be executed because the maximum number of queued jobs has been exceeded."*
 - The queued count stays pinned — it does not increase
-- The dispatched workflow run **never appears**
 
 ```
 # After reaching the limit:
 $ curl -s -o /dev/null -w '%{http_code}' -X POST ... /dispatches
 204                          # ← looks successful
 
-$ gh api .../actions/runs?status=queued | jq '.total_count'
-50000                        # ← unchanged
+$ gh api .../actions/runs/24145020562 --jq '{status, conclusion}'
+{"status":"completed","conclusion":"failure"}   # ← instantly failed
+
+$ gh api .../actions/runs/24145020562/jobs --jq '.total_count'
+0                                               # ← no jobs created
 ```
 
-There is **no way to distinguish a silently dropped dispatch from a successful one** based on the HTTP response alone.
+The HTTP response is indistinguishable from a real success, but the **run is detectable after the fact**: query `?status=completed&conclusion=failure` and filter for runs with 0 jobs. These runs also have a characteristic ~1-2 second lifetime (`created_at` to `updated_at`).
 
 <details>
-<summary>HTTP 204 response headers (silently dropped — identical to real success)</summary>
+<summary>HTTP 204 response headers (dropped dispatch — identical to real success)</summary>
 
 ```
 HTTP/2 204
@@ -226,7 +230,7 @@ We dispatched to a 256-job matrix workflow (`strategy.matrix` with 256 entries �
 
 The throughput is ~40 branches/second. This never reached the documented 500/10s workflow enqueue limit because a single `git push` of 4,000 branches takes ~100 seconds to transfer.
 
-**Push events are also silently dropped** when the queue is at ~50k jobs — identical behavior to API dispatches.
+**Push events are also dropped** when the queue is at ~50k jobs — identical behavior to API dispatches (run created, instantly fails with 0 jobs).
 
 ### 4. API design gaps
 
@@ -258,7 +262,22 @@ This means you can't reliably pre-calculate how much queue capacity a dispatch w
 
 ## Detection and mitigation
 
-Since silent drops are undetectable from the HTTP response, you need out-of-band detection:
+The HTTP response (204) is indistinguishable from success, but dropped dispatches **are detectable** after the fact:
+
+### 0. Query for failed runs with zero jobs (most reliable)
+
+```bash
+# Find all runs that were dropped due to queue limit
+gh api "repos/{owner}/{repo}/actions/runs?status=completed&conclusion=failure&per_page=100" \
+  --jq '.workflow_runs[] | select(.id) | .id' | while read id; do
+    jobs=$(gh api "repos/{owner}/{repo}/actions/runs/$id/jobs" --jq '.total_count')
+    [ "$jobs" = "0" ] && echo "DROPPED: run $id"
+done
+```
+
+A run with `conclusion: failure` and 0 jobs is the definitive signal. These runs also have a ~1-2 second lifetime. This works for **all trigger types** (push, PR, dispatch, schedule, UI) — no payload instrumentation needed.
+
+Additional detection approaches:
 
 ### 1. Poll queue depth (per-repo, doesn't scale)
 
@@ -297,11 +316,11 @@ This catches drops after the fact but requires the job to run and emit the ID. *
 
 | | Rate limit (secondary) | Queue limit (~50k jobs) |
 |---|---|---|
-| **HTTP status** | 403 | 204 (fake success) |
-| **Error message** | Yes, clear message + `retry-after` | None |
-| **Detectable from response** | Yes | No |
+| **HTTP status** | 403 | 204 (looks like success) |
+| **Error message** | Yes, clear message + `retry-after` | None in response; visible in UI and on the created run |
+| **Detectable from response** | Yes | No — but run shows `conclusion: failure` with 0 jobs |
 | **Recovery** | Wait ~15s (despite `retry-after: 60`) | Drain queue below ~50k jobs |
-| **Risk** | Low (you know it failed) | **High (you think it succeeded)** |
+| **Risk** | Low (you know it failed) | **Medium** (response looks successful, but detectable after the fact) |
 | **Blast radius** | Just the rate-limited token | **Entire org (all repos)** |
 | **Limit unit** | Requests per time window | Jobs (not runs) |
 | **Scope** | Per-IP or per-org (shared across tokens) | Per-repository |
@@ -312,13 +331,13 @@ This catches drops after the fact but requires the job to run and emit the ID. *
 
 2. **Matrix workflows consume proportionally more queue capacity.** A 256-job matrix dispatch uses 256× more queue than a single-job dispatch. Factor this into capacity planning.
 
-3. **Silent drops are the most dangerous failure mode.** Your client thinks the dispatch succeeded. Build reconciliation — match dispatched IDs to actual runs, alert on gaps.
+3. **Dropped dispatches are detectable — but only after the fact.** The dispatch API returns 204 (indistinguishable from success), but the created run will have `conclusion: failure` with 0 jobs. Query for these to detect and alert on drops. This works for all trigger types, not just dispatches.
 
 4. **One runaway repo can take down the entire org's CI.** If any repo accumulates ~50k queued jobs and leaves them, all repos in the org start failing. Monitor and alert on queue depth org-wide.
 
 5. **The secondary rate limit is the practical throughput ceiling, not 500/10s.** At ~180 accepted dispatches per burst, you'll hit the secondary limit long before the documented 500/10s workflow enqueue limit. The secondary limit appears shared across tokens on the same org/IP, so multiple tokens don't help with burst throughput (they help with sustained hourly throughput via independent primary rate limits of 5,000/hr each).
 
-6. **Push events bypass the API rate limit but not the queue limit.** If you need high-throughput enqueuing, push events can deliver ~40 runs/second without hitting the secondary rate limit. But they still hit the ~50k job queue ceiling with identical silent-drop behavior.
+6. **Push events bypass the API rate limit but not the queue limit.** If you need high-throughput enqueuing, push events can deliver ~40 runs/second without hitting the secondary rate limit. But they still hit the ~50k job queue ceiling with identical drop behavior.
 
 ## Other docs
 
@@ -337,7 +356,7 @@ This catches drops after the fact but requires the job to run and emit the ID. *
 | `scripts/cancel-multitoken.sh` | Bulk cancel queued runs using multiple tokens in parallel |
 | `scripts/generate-tokens.sh` | Generate GitHub App installation tokens from stored credentials |
 | `scripts/monitor.sh` | Live dashboard of run statuses and API rate limit remaining |
-| `scripts/reconcile.sh` | Compare accepted dispatches vs actual workflow runs to find silent drops |
+| `scripts/reconcile.sh` | Compare accepted dispatches vs actual workflow runs to find dropped dispatches |
 | `runner/setup.sh` | Download and register org-level self-hosted runner |
 | `runner/start.sh` | Start the runner (queue drains) |
 | `runner/stop.sh` | Stop the runner (queue accumulates) |
