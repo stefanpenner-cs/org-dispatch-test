@@ -2,16 +2,25 @@
 
 Empirical testing of GitHub's dispatch queue size limits, rate limits, and failure behaviors.
 
-## Questions
+## Summary
 
-1. **What happens when you exceed the dispatch rate limit?**
-2. **What happens when you exceed 50,000 queued runs?**
+| Question | Answer |
+|----------|--------|
+| What happens at the dispatch rate limit? | Explicit **HTTP 403** at ~180 accepted/burst. Zero silent drops. |
+| What happens at 50,000 queued runs? | **Silent drops** — API returns 204 (fake success), run never created. |
+| Does 50k limit count runs or jobs? | **Runs.** 45k jobs across 177 runs, no drops. Effective capacity: 12.8M jobs. |
+| What is the blast radius of 50k queued? | **Entire org.** All repos fail, not just the one with the full queue. |
+| Can you get a run ID back from dispatch? | **No.** Both `repository_dispatch` and `workflow_dispatch` return empty 204. |
+| Can you detect silent drops from the response? | **No.** Must poll `?status=queued` count independently. |
 
 ## Setup
 
 - **Org:** [stefanpenner-cs](https://github.com/stefanpenner-cs)
 - **Runner:** Org-level self-hosted runner on macOS (ARM64), controllable via `runner/start.sh` and `runner/stop.sh` to gate queue draining
-- **Dispatch method:** `repository_dispatch` via REST API (`POST /repos/{owner}/{repo}/dispatches`)
+- **Dispatch methods:**
+  - `repository_dispatch` via REST API (`POST /repos/{owner}/{repo}/dispatches`)
+  - Push events (branch creation) to bypass API secondary rate limit
+  - 256-job matrix workflows to test run-vs-job counting
 
 ## Findings
 
@@ -213,12 +222,22 @@ If the limit counted jobs, drops would have started at ~196 dispatches (196 × 2
 
 3. **GitHub's maximum matrix size is 256 jobs per workflow run.** This is a hard limit that cannot be overridden through configuration (though it can be bypassed via nested reusable workflows).
 
+## Other docs
+
+- **[DISPATCH_FLOW.md](DISPATCH_FLOW.md)** — Visual walkthrough of the full dispatch-to-runner pipeline: API request, broker long-poll, job message payload, and all five token types (PAT, runner RSA, session OAuth, GITHUB_TOKEN, OIDC).
+
 ## Tools
 
 | Script | Purpose |
 |--------|---------|
 | `scripts/flood.sh` | Serial dispatch flood with per-request HTTP status logging |
 | `scripts/flood-parallel.sh` | Parallel dispatch flood via `xargs -P` for high throughput |
+| `scripts/flood-sustained.sh` | Long-running sustained flood with rate limit awareness and backoff |
+| `scripts/flood-multitoken.sh` | Multi-token flood using independent rate limits per GitHub App |
+| `scripts/flood-push.sh` | Push-event flood via branch creation (bypasses API secondary rate limit) |
+| `scripts/matrix-flood.sh` | Matrix dispatch flood for testing run-vs-job queue counting |
+| `scripts/cancel-multitoken.sh` | Bulk cancel queued runs using multiple tokens in parallel |
+| `scripts/generate-tokens.sh` | Generate GitHub App installation tokens from stored credentials |
 | `scripts/monitor.sh` | Live dashboard of run statuses and API rate limit remaining |
 | `scripts/reconcile.sh` | Compare accepted dispatches vs actual workflow runs to find silent drops |
 | `runner/setup.sh` | Download and register org-level self-hosted runner |
@@ -234,11 +253,19 @@ bash runner/start.sh
 
 # Send test dispatches
 bash scripts/flood.sh 10                    # 10 serial dispatches
-bash scripts/flood-parallel.sh 500 50       # 500 parallel dispatches
+bash scripts/flood-parallel.sh 500 50       # 500 parallel dispatches, 50 concurrent
+bash scripts/flood-push.sh 600              # 600 branches pushed (bypasses API rate limit)
+
+# Multi-token flood (for reaching 50k)
+bash scripts/generate-tokens.sh             # Generate fresh app tokens
+bash scripts/flood-multitoken.sh 50500 credentials/tokens.txt
 
 # Monitor
 bash scripts/monitor.sh --watch
 
 # Reconcile after a test
 bash scripts/reconcile.sh results/<run_id>
+
+# Bulk cancel
+bash scripts/cancel-multitoken.sh
 ```
