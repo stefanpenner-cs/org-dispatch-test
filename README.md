@@ -14,7 +14,7 @@ Empirical testing of GitHub's dispatch queue limits, rate limits, and failure be
 | Detect dropped dispatches? | **Yes** — after the fact. Dropped runs show `conclusion: failure` with 0 jobs. Query `?status=completed&conclusion=failure` and filter for `jobs.total_count == 0`. |
 | Push events bypass rate limit? | **Yes.** ~40 branches/s, up to ~4010 per push. But still hit the 50k job queue limit. |
 | Secondary rate limit per-token? | **No.** Appears shared across tokens on same org/IP. 11 tokens performed same as 1. |
-| 500/10s workflow enqueue limit? | **Never reached.** The secondary rate limit always fires first at ~180/burst. |
+| 500/10s workflow enqueue limit? | **Not exercised.** The secondary rate limit (~180/burst) always fired first. Both limits likely exist, but we couldn't reach the 500/10s limit from a single IP/org. |
 
 ## Setup
 
@@ -45,7 +45,7 @@ Empirical testing of GitHub's dispatch queue limits, rate limits, and failure be
 
 **Total: 729 dispatches accepted, 729 workflow runs created. Zero silent drops.**
 
-The secondary (abuse) rate limit fires at ~180 accepted dispatches per burst, returning HTTP 403 with `retry-after: 60`. This fires **before** the documented 500/10s workflow queue limit — we never reached that limit.
+The secondary (abuse) rate limit fires at ~180 accepted dispatches per burst, returning HTTP 403 with `retry-after: 60`. This fired before we could reach the documented 500/10s workflow enqueue limit. Both limits likely exist independently, but we could not exercise the 500/10s limit from a single IP/org — the secondary rate limit (which appears to be per-IP or per-org) always intervened first.
 
 Key details:
 - **HTTP 403, not 429.** The 403 includes `retry-after: 60` and **lacks the `x-ratelimit-*` headers** present on 204 responses — confirming this is the secondary (abuse) rate limit, not the primary.
@@ -228,7 +228,7 @@ We dispatched to a 256-job matrix workflow (`strategy.matrix` with 256 entries �
 | 4,000 | ~100s | 4,000 | All created |
 | 4,100+ | — | — | **Git server rejects push** (Internal Server Error at ~4,010 refs) |
 
-The throughput is ~40 branches/second. This never reached the documented 500/10s workflow enqueue limit because a single `git push` of 4,000 branches takes ~100 seconds to transfer.
+The throughput is ~40 branches/second. This did not exercise the documented 500/10s workflow enqueue limit — a single `git push` of 4,000 branches takes ~100 seconds to transfer, spreading the enqueues well below 500/10s.
 
 **Push events are also dropped** when the queue is at ~50k jobs — identical behavior to API dispatches (run created, instantly fails with 0 jobs).
 
@@ -335,7 +335,7 @@ This catches drops after the fact but requires the job to run and emit the ID. *
 
 4. **One runaway repo can take down the entire org's CI.** If any repo accumulates ~50k queued jobs and leaves them, all repos in the org start failing. Monitor and alert on queue depth org-wide.
 
-5. **The secondary rate limit is the practical throughput ceiling, not 500/10s.** At ~180 accepted dispatches per burst, you'll hit the secondary limit long before the documented 500/10s workflow enqueue limit. The secondary limit appears shared across tokens on the same org/IP, so multiple tokens don't help with burst throughput (they help with sustained hourly throughput via independent primary rate limits of 5,000/hr each).
+5. **The secondary rate limit was our practical throughput ceiling.** At ~180 accepted dispatches per burst, we hit the secondary limit before reaching the documented 500/10s workflow enqueue limit. Both limits likely exist independently, but the secondary limit appears shared per-IP or per-org, so we couldn't bypass it with multiple tokens. Distributed clients across different IPs may be able to reach the 500/10s limit. Multiple tokens still help with sustained hourly throughput via independent primary rate limits of 5,000/hr each.
 
 6. **Push events bypass the API rate limit but not the queue limit.** If you need high-throughput enqueuing, push events can deliver ~40 runs/second without hitting the secondary rate limit. But they still hit the ~50k job queue ceiling with identical drop behavior.
 
