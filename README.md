@@ -138,18 +138,33 @@ We sent 5 dispatches after hitting 50k, all returned 204, queue stayed at 50,000
 **Response headers:**
 ```
 HTTP/2 204
-date: Wed, 08 Apr 2026 00:39:48 GMT
+date: Wed, 08 Apr 2026 03:56:04 GMT
+x-oauth-scopes: admin:org, admin:public_key, gist, repo
+x-accepted-oauth-scopes:
+x-oauth-client-id: 178c6fc778ccc68e1d6a
+x-github-media-type: github.v3; format=json
+x-github-api-version-selected: 2022-11-28
 x-ratelimit-limit: 5000
-x-ratelimit-remaining: 1495
-x-ratelimit-reset: 1775611288
-x-ratelimit-used: 3505
+x-ratelimit-remaining: 899
+x-ratelimit-reset: 1775622104
+x-ratelimit-used: 4101
 x-ratelimit-resource: core
-x-github-request-id: F907:11D030:8ED9AF:23C142B:69D5A3D3
+access-control-expose-headers: ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset
+access-control-allow-origin: *
+strict-transport-security: max-age=31536000; includeSubdomains; preload
+x-frame-options: deny
+x-content-type-options: nosniff
+x-xss-protection: 0
+referrer-policy: origin-when-cross-origin, strict-origin-when-cross-origin
+content-security-policy: default-src 'none'
+vary: Accept-Encoding, Accept, X-Requested-With
+x-github-request-id: CB6E:5500B:1E068C5:78E16F9:69D5D1D3
+server: github.com
 ```
 
-**Response body:** *(empty — 204 No Content, indistinguishable from a real success)*
+**Response body:** *(empty — 204 No Content)*
 
-There is **no way to distinguish a silently dropped dispatch from a successful one** based on the HTTP response alone. You must check the queue count independently.
+This is byte-for-byte identical to a real successful dispatch. There is **no way to distinguish a silently dropped dispatch from a successful one** based on the HTTP response alone. You must check the queue count independently.
 
 #### Key takeaways
 
