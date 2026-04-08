@@ -172,11 +172,13 @@ This is byte-for-byte identical to a real successful dispatch. There is **no way
 
 2. **Drops are completely silent.** The API returns 204 (success) with identical headers to a real success. There is no error, no warning, no special header.
 
-3. **The limit is per-repository**, not per-org or per-token. All tokens (PAT and app tokens) see the same 50,000 ceiling.
+3. **The limit is per-repository**, not per-org or per-token. All tokens (PAT and app tokens) see the same 50,000 ceiling. During accumulation, other repos in the same org can still dispatch and queue runs normally.
 
 4. **This contrasts sharply with the rate limit behavior.** The secondary rate limit returns an explicit 403 with a clear error message. The queue limit returns a fake 204.
 
 5. **The total_count API has its own display cap.** The `total_count` for all runs caps at 40,000, but the `status=queued` filter correctly reports 50,000.
+
+6. **Leaving 50k queued runs degrades the entire org.** Once the queue sits at 50,000 for a sustained period, all new workflow runs across *every* repo in the org begin failing immediately — runs complete in ~1 second with `conclusion: failure` and 0 jobs created. This affects repos that have zero queued runs of their own. The only fix is to drain or delete the queued runs (we ultimately deleted and recreated the repo).
 
 #### Comparison: Rate limit vs Queue limit
 
@@ -187,6 +189,7 @@ This is byte-for-byte identical to a real successful dispatch. There is **no way
 | **Detectable from response** | Yes | No |
 | **Recovery** | Wait and retry | Drain queue below 50k |
 | **Risk** | Low (you know it failed) | **High (you think it succeeded)** |
+| **Blast radius** | Just the rate-limited token | **Entire org (all repos)** |
 
 ## Tools
 
