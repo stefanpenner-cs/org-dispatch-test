@@ -1,3 +1,4 @@
 runner/_work/
 results/
 *.pid
+credentials/

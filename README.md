@@ -108,7 +108,70 @@ Notable differences: the 403 includes `retry-after: 60` and notably **lacks the 
 
 ### Question 2: What happens when you exceed 50,000 queued runs?
 
-*Testing not yet started. Requires ~50,000 API calls at a sustained rate, estimated ~10 hours.*
+**Tested 2026-04-07.** Runner stopped, accumulated 50,000+ queued runs using 7 tokens (6 GitHub App installation tokens + 1 PAT) over ~2 hours.
+
+#### Result: Silent drops — API returns 204 but runs are never created
+
+Once the queue reaches 50,000, additional dispatches are **silently dropped**:
+
+- The API returns **HTTP 204** (success) — no error, no indication of failure
+- The queued count stays pinned at exactly **50,000**
+- The dispatched workflow runs **never appear** in the runs list
+
+This is the most dangerous failure mode: your client thinks the dispatch succeeded, but the workflow never runs.
+
+#### Verification
+
+```
+# After reaching 50,000 queued:
+$ curl -s -o /dev/null -w '%{http_code}' -X POST ... /dispatches
+204                          # ← looks successful
+
+$ gh api .../actions/runs?status=queued | jq '.total_count'
+50000                        # ← still 50,000, didn't increase
+```
+
+We sent 5 dispatches after hitting 50k, all returned 204, queue stayed at 50,000.
+
+#### HTTP 204 response past 50k (identical to normal success)
+
+**Response headers:**
+```
+HTTP/2 204
+date: Wed, 08 Apr 2026 00:39:48 GMT
+x-ratelimit-limit: 5000
+x-ratelimit-remaining: 1495
+x-ratelimit-reset: 1775611288
+x-ratelimit-used: 3505
+x-ratelimit-resource: core
+x-github-request-id: F907:11D030:8ED9AF:23C142B:69D5A3D3
+```
+
+**Response body:** *(empty — 204 No Content, indistinguishable from a real success)*
+
+There is **no way to distinguish a silently dropped dispatch from a successful one** based on the HTTP response alone. You must check the queue count independently.
+
+#### Key takeaways
+
+1. **The 50,000 queued run limit is real and enforced.** The queue count pins at exactly 50,000.
+
+2. **Drops are completely silent.** The API returns 204 (success) with identical headers to a real success. There is no error, no warning, no special header.
+
+3. **The limit is per-repository**, not per-org or per-token. All tokens (PAT and app tokens) see the same 50,000 ceiling.
+
+4. **This contrasts sharply with the rate limit behavior.** The secondary rate limit returns an explicit 403 with a clear error message. The queue limit returns a fake 204.
+
+5. **The total_count API has its own display cap.** The `total_count` for all runs caps at 40,000, but the `status=queued` filter correctly reports 50,000.
+
+#### Comparison: Rate limit vs Queue limit
+
+| | Rate limit (secondary) | Queue limit (50k) |
+|---|---|---|
+| **HTTP status** | 403 | 204 (fake success) |
+| **Error message** | Yes, clear message | None |
+| **Detectable from response** | Yes | No |
+| **Recovery** | Wait and retry | Drain queue below 50k |
+| **Risk** | Low (you know it failed) | **High (you think it succeeded)** |
 
 ## Tools
 
