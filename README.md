@@ -177,7 +177,7 @@ This is byte-for-byte identical to a real successful dispatch. There is **no way
 
 #### Key takeaways
 
-1. **The 50,000 queued run limit is real and enforced.** The queue count pins at exactly 50,000.
+1. **The 50,000 queued workflow run limit is real and enforced.** The queue count pins at exactly 50,000 workflow runs. This counts runs, not jobs — a 256-job matrix run counts as 1 (see [Question 3](#question-3-does-the-50k-limit-count-runs-or-jobs)).
 
 2. **Drops are completely silent.** The API returns 204 (success) with identical headers to a real success. There is no error, no warning, no special header.
 
