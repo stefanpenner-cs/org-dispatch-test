@@ -10,7 +10,7 @@ Empirical testing of GitHub's dispatch queue limits, rate limits, and failure be
 | Queue limit | **~50,000 queued jobs.** API returns 204, run is created but **instantly fails** (`conclusion: failure`, 0 jobs). |
 | Limit counts runs or jobs? | **Jobs.** 50k single-job runs and ~183 matrix runs (×256 jobs) both hit the same ceiling. |
 | Blast radius of full queue | **Entire org.** All repos in the org fail, not just the one with the full queue. |
-| Run ID from dispatch? | **No.** Both `repository_dispatch` and `workflow_dispatch` return empty 204. |
+| Run ID from dispatch? | `workflow_dispatch`: **yes**, with `return_run_details` param ([since Feb 2026](https://github.blog/changelog/2026-02-19-workflow-dispatch-api-now-returns-run-ids/)). `repository_dispatch`: **no**, still returns empty 204. |
 | Detect dropped dispatches? | **Yes** — after the fact. Dropped runs show `conclusion: failure` with 0 jobs. Query `?status=completed&conclusion=failure` and filter for `jobs.total_count == 0`. |
 | Push events bypass rate limit? | **Yes.** ~40 branches/s, up to ~4010 per push. But still hit the 50k job queue limit. |
 | Secondary rate limit per-token? | **No.** Appears shared across tokens on same org/IP. 11 tokens performed same as 1. |
@@ -234,19 +234,21 @@ The throughput is ~40 branches/second. This did not exercise the documented 500/
 
 ### 4. API design gaps
 
-#### No run ID from dispatch
+#### Run ID from dispatch
 
-Neither `repository_dispatch` nor `workflow_dispatch` returns a run ID. Both return an empty 204 No Content response. This is a long-standing gap in the GitHub API.
+As of [February 2026](https://github.blog/changelog/2026-02-19-workflow-dispatch-api-now-returns-run-ids/), `workflow_dispatch` supports an optional `return_run_details` parameter that returns the run ID and URLs in the response. `gh workflow run` (v2.87.0+) also returns the run URL by default.
+
+`repository_dispatch` still returns an empty 204 — no run ID, no way to correlate the request to the resulting run(s) (which may be multiple, since `repository_dispatch` fans out to all matching workflows).
 
 ```bash
-# repository_dispatch — targets event type, fan-out to multiple workflows
+# workflow_dispatch — now supports return_run_details
+POST /repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches
+{"ref": "main", "inputs": {"probe_id": "abc"}, "return_run_details": true}
+# → returns run ID, workflow ID, URLs
+
+# repository_dispatch — still no run ID
 POST /repos/{owner}/{repo}/dispatches
 {"event_type": "probe", "client_payload": {"probe_id": "abc"}}
-# → 204 (empty)
-
-# workflow_dispatch — targets specific workflow + ref, string-only inputs
-POST /repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches
-{"ref": "main", "inputs": {"probe_id": "abc"}}
 # → 204 (empty)
 ```
 
@@ -297,7 +299,7 @@ Listen for `workflow_run` (fires once per run) or `workflow_job` (fires per job)
 {"action": "requested", "workflow_run": {"id": 24101248322, "status": "queued"}}
 ```
 
-If you dispatch and never receive a corresponding webhook, the dispatch was dropped. This also gives you the **run ID** that the dispatch API refuses to return.
+If you dispatch and never receive a corresponding webhook, the dispatch was dropped. For `repository_dispatch` (which still doesn't return a run ID), this is also the only way to get the run ID.
 
 ### 3. Reconciliation via client_payload (dispatch-only)
 
