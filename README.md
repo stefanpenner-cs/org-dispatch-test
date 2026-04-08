@@ -5,7 +5,7 @@ Empirical testing of GitHub's dispatch queue size limits, rate limits, and failu
 ## Questions
 
 1. **What happens when you exceed the dispatch rate limit?**
-2. **What happens when you exceed 50,000 queued runs?** *(testing in progress)*
+2. **What happens when you exceed 50,000 queued runs?**
 
 ## Setup
 
