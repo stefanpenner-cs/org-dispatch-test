@@ -60,7 +60,7 @@ GitHub returns **204 No Content** (empty body) on success. Internally it:
 
 Or returns **403** if the secondary rate limit is hit (see README.md for details).
 
-Or returns **204 but silently drops the job** if the repository already has 50,000 queued runs.
+Or returns **204 but silently drops the job** if the repository already has ~50,000 queued jobs.
 
 ## Step 2: Runner long-polls for work
 
